@@ -32,7 +32,7 @@
     "version": "changeset version && npm install --package-lock-only",
     "release": "npm run build && changeset publish",
     "release:dry": "npm run build && npm publish --dry-run --access public",
-    "prepare": "husky"
+    "prepare": "npm run build && husky"
   },
   "lint-staged": {
     "*.{ts,js,mjs}": [
@@ -47,7 +47,7 @@
     "node": ">=22.13"
   },
   "dependencies": {
-    "@emby-utils/client": "^0.1.0",
+    "@emby-utils/client": "github:vromero/emby-utils-client",
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "yaml": "^2.8.3",
