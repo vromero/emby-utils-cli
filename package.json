@@ -47,7 +47,7 @@
     "node": ">=22.13"
   },
   "dependencies": {
-    "@emby-utils/client": "github:vromero/emby-utils-client",
+    "@emby-utils/client": "github:vromero/emby-utils-client#v0.1.0",
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "yaml": "^2.8.3",
