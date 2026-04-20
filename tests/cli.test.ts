@@ -1,47 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
-import { buildCli, CliIO } from "../src/index.js";
+import { buildCli } from "../src/index.js";
 import { EMBY_API_KEY, EMBY_HOST, server } from "./setup.js";
+import { makeIO, runCli } from "./helpers.js";
 import "./setup.js";
-
-interface CapturedIO {
-  stdout: string[];
-  stderr: string[];
-  exitCode: number | null;
-  io: CliIO;
-}
-
-function makeIO(): CapturedIO {
-  const state: CapturedIO = {
-    stdout: [],
-    stderr: [],
-    exitCode: null,
-    io: {
-      stdout: (l) => state.stdout.push(l),
-      stderr: (l) => state.stderr.push(l),
-      exit: (code) => {
-        state.exitCode = code;
-      },
-    },
-  };
-  return state;
-}
 
 /** Run the CLI with the given arguments. Always provides credentials. */
 async function run(args: string[]) {
-  const capture = makeIO();
-  const program = buildCli({ io: capture.io });
-  // Make commander tolerant of test-driven exits: we want it to surface our
-  // wrapped exit codes via our CliIO rather than killing the process.
-  program.exitOverride();
-  try {
-    await program.parseAsync(["--host", EMBY_HOST, "--api-key", EMBY_API_KEY, ...args], {
-      from: "user",
-    });
-  } catch {
-    // commander throws when exitOverride is set; we assert via capture.exitCode
-  }
-  return capture;
+  return runCli(args);
 }
 
 describe("emby CLI - credential handling", () => {

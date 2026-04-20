@@ -9,12 +9,21 @@
  */
 import { existsSync } from "node:fs";
 
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace NodeJS {
+    interface Process {
+      loadEnvFile(path: string): void;
+    }
+  }
+}
+
 export function loadEnv(): void {
   const explicit = process.env.EMBY_ENV_FILE;
   const candidate = explicit ?? ".env";
   if (!existsSync(candidate)) return;
   try {
-    (process as unknown as { loadEnvFile: (path: string) => void }).loadEnvFile(candidate);
+    process.loadEnvFile(candidate);
   } catch (err) {
     console.error(`[emby] failed to load env file '${candidate}':`, err);
   }

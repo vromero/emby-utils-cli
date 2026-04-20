@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { createRequire } from "node:module";
 import { EmbyClient } from "@emby-utils/client";
 import { formatOutput, OutputFormat } from "./format.js";
 import { readSupporterKey, registerPremiereKey, runInit } from "./init.js";
@@ -11,6 +12,9 @@ import {
   uninstallPlugin,
   PluginNotFoundError,
 } from "./plugins.js";
+
+const require = createRequire(import.meta.url);
+const pkg = require("../package.json") as { version: string };
 
 /** How results are emitted. Overridable so tests can capture output. */
 export interface CliIO {
@@ -87,7 +91,7 @@ export function buildCli(config: CliConfig = {}): Command {
   program
     .name("emby")
     .description("Semantic CLI for the Emby REST API.")
-    .version("0.1.0")
+    .version(pkg.version)
     .option("--host <url>", "Emby server URL (fallback: EMBY_HOST env)")
     .option("--api-key <key>", "Emby API key (fallback: EMBY_API_KEY env)")
     .option("--format <format>", "Output format: json (default), yaml, table", "json")
