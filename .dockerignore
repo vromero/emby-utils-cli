@@ -1,0 +1,36 @@
+# Build artifacts
+dist/
+coverage/
+*.tsbuildinfo
+
+# Dependencies (reinstalled in Docker)
+node_modules/
+
+# Git / CI
+.git/
+.github/
+.husky/
+
+# Tests (not needed in image)
+tests/
+vitest.config.ts
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Environment files (secrets — never bake into image)
+.env
+.env.*
+
+# Documentation (not needed in image)
+*.md
+LICENSE
+AGENTS.md
+
+# Config files not needed at runtime
+eslint.config.js
+.prettierrc.json
+.prettierignore
