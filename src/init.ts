@@ -99,6 +99,16 @@ export interface ApiKeyRecord {
   app: string;
   /** The opaque token value. */
   token: string;
+  /** Whether the key was newly created or already existed. */
+  status: "created" | "skipped";
+}
+
+/** A library reconciliation outcome. */
+export interface LibraryOutcome {
+  /** The library display name. */
+  name: string;
+  /** Whether the library was newly created or already existed. */
+  status: "created" | "skipped";
 }
 
 /** Outcome of the premiere-key reconciliation step. */
@@ -115,14 +125,10 @@ export interface InitResult {
   wizardRan: boolean;
   /** The access token minted for the admin user. */
   accessToken: string;
-  /** Libraries that were newly created. */
-  librariesCreated: string[];
-  /** Libraries that already existed and were left untouched. */
-  librariesSkipped: string[];
-  /** API keys that were newly minted during this run. */
-  apiKeysCreated: ApiKeyRecord[];
-  /** API keys that already existed and were reused as-is. */
-  apiKeysSkipped: ApiKeyRecord[];
+  /** Library reconciliation outcomes, one per requested library. */
+  libraries: LibraryOutcome[];
+  /** API key reconciliation outcomes, one per requested label. */
+  apiKeys: ApiKeyRecord[];
   /** Premiere-key reconciliation outcome. */
   premiereKey: PremiereKeyStatus;
   /** One outcome per requested plugin, in input order. */
@@ -302,8 +308,7 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
     }
   }
 
-  const created: string[] = [];
-  const skipped: string[] = [];
+  const libraryOutcomes: LibraryOutcome[] = [];
   for (const lib of libs) {
     const res = await client.addLibrary({
       name: lib.name,
@@ -311,23 +316,21 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
       collectionType: lib.collectionType,
       refreshLibrary: opts.refreshLibraries,
     });
-    if (res.created) created.push(lib.name);
-    else skipped.push(lib.name);
+    libraryOutcomes.push({ name: lib.name, status: res.created ? "created" : "skipped" });
   }
 
   // API key reconciliation. Identified by the `App` label: matching label =>
   // reuse the existing token; otherwise mint a fresh one. Emby permits
   // duplicate labels; we always return the first match (Emby's own ordering)
   // and never create a second.
-  const apiKeysCreated: ApiKeyRecord[] = [];
-  const apiKeysSkipped: ApiKeyRecord[] = [];
+  const apiKeyOutcomes: ApiKeyRecord[] = [];
   const apiKeyLabels = opts.apiKeys ?? [];
   if (apiKeyLabels.length > 0) {
     const existingByApp = await listExistingApiKeys(client);
     for (const app of apiKeyLabels) {
       const existing = existingByApp.get(app);
       if (existing) {
-        apiKeysSkipped.push({ app, token: existing });
+        apiKeyOutcomes.push({ app, token: existing, status: "skipped" });
         continue;
       }
       // `postAuthKeys` returns 204 No Content: the new key is not in the
@@ -340,7 +343,7 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
           `Emby accepted postAuthKeys for App='${app}' but the new key is not visible in /Auth/Keys.`
         );
       }
-      apiKeysCreated.push({ app, token });
+      apiKeyOutcomes.push({ app, token, status: "created" });
       // Keep our local view consistent for any subsequent labels in the loop.
       existingByApp.set(app, token);
     }
@@ -388,10 +391,8 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
   return {
     wizardRan,
     accessToken: AccessToken,
-    librariesCreated: created,
-    librariesSkipped: skipped,
-    apiKeysCreated,
-    apiKeysSkipped,
+    libraries: libraryOutcomes,
+    apiKeys: apiKeyOutcomes,
     premiereKey,
     plugins: pluginOutcomes,
     serverRestarted,

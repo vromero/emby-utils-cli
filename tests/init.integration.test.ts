@@ -56,12 +56,18 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
 
       expect(result.wizardRan).toBe(true);
       expect(result.accessToken).toMatch(/^[0-9a-f]{20,}$/i);
-      expect(result.librariesCreated.sort()).toEqual(["Movies", "TV Shows"]);
-      expect(result.librariesSkipped).toEqual([]);
-      expect(result.apiKeysCreated).toHaveLength(1);
-      expect(result.apiKeysCreated[0].app).toBe("integration-test-app");
-      expect(result.apiKeysCreated[0].token).toMatch(/^[0-9a-f]{20,}$/i);
-      expect(result.apiKeysSkipped).toEqual([]);
+      expect(
+        result.libraries
+          .filter((l) => l.status === "created")
+          .map((l) => l.name)
+          .sort()
+      ).toEqual(["Movies", "TV Shows"]);
+      expect(result.libraries.filter((l) => l.status === "skipped")).toEqual([]);
+      const createdKeys = result.apiKeys.filter((k) => k.status === "created");
+      expect(createdKeys).toHaveLength(1);
+      expect(createdKeys[0].app).toBe("integration-test-app");
+      expect(createdKeys[0].token).toMatch(/^[0-9a-f]{20,}$/i);
+      expect(result.apiKeys.filter((k) => k.status === "skipped")).toEqual([]);
       // No premiereKey was requested; the call must report that explicitly.
       expect(result.premiereKey).toEqual({ requested: false });
       // No plugins were requested; result must carry an empty list and no restart.
@@ -79,7 +85,7 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
       expect(names).toEqual(["Movies", "TV Shows"]);
 
       // The minted API key should itself be usable against the server.
-      const keyClient = new EmbyClient(host, result.apiKeysCreated[0].token);
+      const keyClient = new EmbyClient(host, createdKeys[0].token);
       const keyUsers = await keyClient.callOperation("getUsers");
       expect(keyUsers.some((u) => u.Name === "admin")).toBe(true);
     }, 180_000);
@@ -96,11 +102,17 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
         apiKeys: ["integration-test-app", "second-app"],
       });
       expect(result.wizardRan).toBe(false);
-      expect(result.librariesCreated).toEqual(["Music"]);
-      expect(result.librariesSkipped).toEqual(["Movies"]);
+      expect(result.libraries).toEqual([
+        { name: "Movies", status: "skipped" },
+        { name: "Music", status: "created" },
+      ]);
       // The first key was minted in the previous test; the second is new.
-      expect(result.apiKeysSkipped.map((k) => k.app)).toEqual(["integration-test-app"]);
-      expect(result.apiKeysCreated.map((k) => k.app)).toEqual(["second-app"]);
+      expect(result.apiKeys.filter((k) => k.status === "skipped").map((k) => k.app)).toEqual([
+        "integration-test-app",
+      ]);
+      expect(result.apiKeys.filter((k) => k.status === "created").map((k) => k.app)).toEqual([
+        "second-app",
+      ]);
       expect(result.premiereKey).toEqual({ requested: false });
       expect(result.plugins).toEqual([]);
       expect(result.serverRestarted).toBe(false);
@@ -171,7 +183,7 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
       }
       const out = JSON.parse(stdout.join("\n"));
       expect(out.wizardRan).toBe(false);
-      expect(out.librariesCreated).toEqual(["Books"]);
+      expect(out.libraries).toEqual([{ name: "Books", status: "created" }]);
       expect(out.accessToken).toMatch(/^[0-9a-f]{20,}$/i);
 
       // Confirm the library actually lives on the server.

@@ -126,10 +126,8 @@ export function buildCli(config: CliConfig = {}): Command {
         emit(io, program, {
           wizardRan: result.wizardRan,
           accessToken: result.accessToken,
-          librariesCreated: result.librariesCreated,
-          librariesSkipped: result.librariesSkipped,
-          apiKeysCreated: result.apiKeysCreated,
-          apiKeysSkipped: result.apiKeysSkipped,
+          libraries: result.libraries,
+          apiKeys: result.apiKeys,
           premiereKey: result.premiereKey,
           plugins: result.plugins,
           serverRestarted: result.serverRestarted,
