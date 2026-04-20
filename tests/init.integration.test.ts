@@ -62,6 +62,11 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
       expect(result.apiKeysCreated[0].app).toBe("integration-test-app");
       expect(result.apiKeysCreated[0].token).toMatch(/^[0-9a-f]{20,}$/i);
       expect(result.apiKeysSkipped).toEqual([]);
+      // No premiereKey was requested; the call must report that explicitly.
+      expect(result.premiereKey).toEqual({ requested: false });
+      // No plugins were requested; result must carry an empty list and no restart.
+      expect(result.plugins).toEqual([]);
+      expect(result.serverRestarted).toBe(false);
 
       const authed = new EmbyClient(host, result.accessToken);
       expect(await authed.isStartupComplete()).toBe(true);
@@ -96,7 +101,24 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
       // The first key was minted in the previous test; the second is new.
       expect(result.apiKeysSkipped.map((k) => k.app)).toEqual(["integration-test-app"]);
       expect(result.apiKeysCreated.map((k) => k.app)).toEqual(["second-app"]);
+      expect(result.premiereKey).toEqual({ requested: false });
+      expect(result.plugins).toEqual([]);
+      expect(result.serverRestarted).toBe(false);
     }, 120_000);
+
+    it("premiere-key idempotency short-circuits when no key is set", async () => {
+      // We can't test a real Emby Premiere key end-to-end (it would require
+      // a valid license and network access to Emby's license service). This
+      // only asserts the pre-flight read path: a fresh server with no
+      // SupporterKey set plus an empty config leaves premiereKey untouched.
+      const client = new EmbyClient(host, "");
+      const result = await runInit(client, {
+        adminUsername: "admin",
+        adminPassword: "ChangeMe!123",
+      });
+      expect(result.wizardRan).toBe(false);
+      expect(result.premiereKey).toEqual({ requested: false });
+    }, 60_000);
   });
 
   describe("`emby init --config` CLI", () => {

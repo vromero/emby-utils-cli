@@ -1,20 +1,33 @@
-# emby-utils-cli
+# @emby-utils/cli
 
 Semantic command-line interface for the [Emby](https://emby.media/) REST API.
 Built on [commander](https://github.com/tj/commander.js) on top of
-[`@emby-utils/client`](https://github.com/vromero/emby-utils-client).
-
-> This project is **not published to npm**. Install directly from GitHub.
+[`@emby-utils/client`](https://www.npmjs.com/package/@emby-utils/client).
 
 ## Install
 
-Install globally from the GitHub repo, pinned to a released tag:
+Install globally from npm:
 
 ```bash
-npm install -g vromero/emby-utils-cli#v0.1.0
+npm install -g @emby-utils/cli
 ```
 
-Or, without a global install, use `npx` against a cloned checkout:
+The binary is named `emby`. Run `emby --help` to confirm the install:
+
+```bash
+emby --version
+emby --help
+```
+
+Or, without a global install, run ad-hoc via `npx`:
+
+```bash
+npx -p @emby-utils/cli emby --help
+```
+
+### From source
+
+For local development or to try an unreleased build:
 
 ```bash
 git clone https://github.com/vromero/emby-utils-cli.git
@@ -25,11 +38,6 @@ node dist/bin.js --help
 ```
 
 `npm install` runs the `prepare` script which builds `dist/` automatically.
-The `@emby-utils/client` dependency is also resolved straight from GitHub
-(pinned to a tag in `package.json`), so there is no npm registry involved
-at any point.
-
-To upgrade, re-run the install command with a new tag (e.g. `#v0.2.0`).
 
 ## Configure
 
@@ -66,6 +74,12 @@ emby items get <itemId> --user-id <userId>
 emby sessions list
 emby libraries list
 emby plugins list
+emby plugins install Trakt --plugin-version 1.2.3 --update-class Beta
+emby plugins uninstall Trakt
+
+# Emby Premiere (supporter) key
+emby premiere status
+emby premiere set MB-XXXX-XXXX-XXXX
 
 # Login (prints an access token)
 export EMBY_API_KEY=$(emby login --username alice --password ...)
@@ -119,6 +133,12 @@ Example `emby.init.json`:
     { "name": "Music", "path": "/data/music", "collectionType": "music" }
   ],
   "apiKeys": ["home-assistant", "mcp-server"],
+  "premiereKey": "${EMBY_PREMIERE_KEY}",
+  "plugins": [
+    { "name": "Trakt" },
+    { "name": "TVHeadEnd", "version": "1.2.3", "updateClass": "Release" }
+  ],
+  "restartAfterPlugins": true,
   "requireFresh": false,
   "refreshLibraries": false
 }
@@ -127,6 +147,41 @@ Example `emby.init.json`:
 Each entry in `apiKeys` is the Emby "App" label used to identify the key.
 On re-runs, keys with a matching label are reused (their existing token is
 returned) rather than duplicated.
+
+`premiereKey` is optional. When present, `init` registers the key via
+`POST /Registrations/RegKey`. It is idempotent: the current
+`ServerConfiguration.SupporterKey` is read first and the registration
+request is skipped when the server already reports the same value. An
+invalid key causes the Emby registration endpoint to return 4xx and the
+error propagates — `init` does not silently treat a rejected key as
+success.
+
+`plugins` is optional. Each entry names an Emby catalog package; `init`
+calls `POST /Packages/Installed/{Name}` and then polls `/Plugins` until
+the plugin appears (or, for an upgrade, until the installed `Version`
+matches the requested one). Idempotency rules:
+
+- If no plugin with that `name` is installed, it is installed fresh
+  (`status: "installed"`).
+- If a plugin with that `name` is installed and either `version` is
+  omitted or matches, it is left alone (`status: "skipped"`).
+- If a plugin with that `name` is installed but its version differs from
+  the requested one, `init` re-POSTs to `/Packages/Installed/{Name}`
+  with the new version and waits for the upgrade to be reflected in
+  `/Plugins` (`status: "upgraded"`).
+
+The optional `version`, `updateClass` (`Release`, `Beta`, `Dev`), and
+`assemblyGuid` fields are forwarded to Emby's package endpoint as-is.
+Polling defaults can be tuned via `pluginInstallTimeoutMs` (default
+120 000) and `pluginInstallPollIntervalMs` (default 2 000); a plugin that
+never appears within the timeout raises `PluginInstallTimeoutError`.
+
+Most plugins require a server restart to become active. Set
+`"restartAfterPlugins": true` to have `init` issue `POST /System/Restart`
+at the end of a run — but only when at least one plugin was newly
+installed or upgraded. A pure-skip run is a no-op and never restarts.
+Plugin-repository configuration (`ServerConfiguration.PluginRepositories`)
+is out of scope; use Emby's UI to add custom repos.
 
 Environment-variable placeholders are expanded at load time:
 
@@ -153,15 +208,87 @@ Output (JSON):
     { "app": "home-assistant", "token": "..." },
     { "app": "mcp-server", "token": "..." }
   ],
-  "apiKeysSkipped": []
+  "apiKeysSkipped": [],
+  "premiereKey": { "requested": true, "updated": true, "skipped": false },
+  "plugins": [
+    { "name": "Trakt", "version": "1.0.0", "id": "plugin-1", "status": "installed" },
+    { "name": "TVHeadEnd", "version": "1.2.3", "id": "plugin-2", "status": "installed" }
+  ],
+  "serverRestarted": true
 }
 ```
+
+When no `premiereKey` is configured, the field is `{ "requested": false }`.
+On a re-run where the key is already registered, it reads
+`{ "requested": true, "updated": false, "skipped": true }`.
 
 Capture the token into an env var:
 
 ```bash
 export EMBY_API_KEY=$(emby init --config ./emby.init.json | jq -r .accessToken)
 ```
+
+### Install and uninstall plugins directly
+
+For already-initialized servers, plugins can be installed one at a time
+without running `emby init`:
+
+```bash
+# Install latest release. Waits for the plugin to show up in /Plugins.
+emby plugins install Trakt
+
+# Install an exact version from the Beta channel.
+emby plugins install Trakt --plugin-version 1.2.3 --update-class Beta
+
+# Skip the wait after POSTing to /Packages/Installed/{Name}.
+emby plugins install Trakt --no-wait
+
+# Tune the wait loop.
+emby plugins install Trakt --timeout-ms 60000 --poll-interval-ms 1000
+
+# Remove a plugin by Name or Id.
+emby plugins uninstall Trakt
+emby plugins uninstall 00000000-0000-0000-0000-000000000001
+
+# A missing plugin is an error by default; --if-present makes it a no-op.
+emby plugins uninstall Trakt --if-present
+```
+
+`install` is idempotent: `status` in the output is `installed` on a fresh
+install, `upgraded` when the installed `Version` didn't match `--plugin-version`,
+or `skipped` when the plugin was already present at an acceptable version.
+The option is spelled `--plugin-version` rather than `--version` to avoid
+colliding with the program's top-level `--version` flag. `uninstall`
+accepts either an Emby plugin `Id` or the plugin `Name`; Names are
+resolved against `GET /Plugins` before deletion.
+
+Plugin installs are asynchronous on Emby's side and most plugins require
+a server restart to be picked up. `emby plugins install` never restarts
+the server — restart it yourself via the Emby UI when you're ready.
+`emby init` can optionally restart once at the end of a run via
+`"restartAfterPlugins": true`.
+
+### Manage the Emby Premiere key directly
+
+For already-initialized servers, the key can be installed or rotated
+without running `emby init`:
+
+```bash
+emby premiere status
+# { "supporterKey": "MB-...", "registered": true }
+
+emby premiere set MB-XXXX-XXXX-XXXX
+# { "supporterKey": "MB-XXXX-XXXX-XXXX", "updated": true, "skipped": false }
+
+# A second call with the same key short-circuits without hitting
+# /Registrations/RegKey:
+emby premiere set MB-XXXX-XXXX-XXXX
+# { "supporterKey": "MB-XXXX-XXXX-XXXX", "updated": false, "skipped": true }
+```
+
+Both subcommands need the usual admin credentials (`--api-key` or
+`EMBY_API_KEY`) because the underlying `/System/Configuration` and
+`/Registrations/RegKey` endpoints are admin-only.
 
 ### Output formats
 

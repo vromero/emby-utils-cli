@@ -49,11 +49,27 @@ describe("parseLibraryFlag", () => {
 // --- runInit ------------------------------------------------------------
 
 /** Simulate a fresh Emby server for the init happy path. */
-function installFreshEmby() {
+function installFreshEmby(
+  options: {
+    initialSupporterKey?: string;
+    /** Initial set of installed plugins visible via GET /Plugins. */
+    initialPlugins?: Array<{ Name: string; Version?: string; Id?: string }>;
+    /** If true, POST /Packages/Installed/{Name} silently drops the package (simulates a timeout). */
+    simulateInstallTimeout?: boolean;
+  } = {}
+) {
   let completed = false;
   const libraries: Array<{ Name: string; Locations: string[]; CollectionType?: string }> = [];
   const authKeys: Array<{ AppName: string; AccessToken: string }> = [];
   let keyCounter = 0;
+  let supporterKey: string | undefined = options.initialSupporterKey;
+  const regKeyCalls: string[] = [];
+  const installedPlugins: Array<{ Name: string; Version?: string; Id?: string }> = [
+    ...(options.initialPlugins ?? []),
+  ];
+  const packageInstallCalls: Array<{ name: string; version?: string; updateClass?: string }> = [];
+  let pluginIdCounter = 0;
+  let restartCalls = 0;
 
   server.use(
     http.get(`${EMBY_HOST}/emby/Startup/Configuration`, () =>
@@ -93,9 +109,67 @@ function installFreshEmby() {
       keyCounter += 1;
       authKeys.push({ AppName: app, AccessToken: `generated-token-${keyCounter}` });
       return new HttpResponse(null, { status: 204 });
+    }),
+    // --- Emby Premiere / supporter key endpoints ---
+    http.get(`${EMBY_HOST}/emby/System/Configuration`, () =>
+      HttpResponse.json({
+        ServerName: "Test Emby",
+        SupporterKey: supporterKey ?? "",
+      })
+    ),
+    http.post(`${EMBY_HOST}/emby/Registrations/RegKey`, async ({ request }) => {
+      const body = (await request.json()) as { MbKey?: string };
+      if (!body?.MbKey) return HttpResponse.json({}, { status: 400 });
+      regKeyCalls.push(body.MbKey);
+      // Emby's real server persists the key back into ServerConfiguration.
+      supporterKey = body.MbKey;
+      return new HttpResponse(null, { status: 204 });
+    }),
+    // --- Plugin / package endpoints ---
+    http.get(`${EMBY_HOST}/emby/Plugins`, () => HttpResponse.json(installedPlugins)),
+    http.post(`${EMBY_HOST}/emby/Packages/Installed/:name`, ({ request, params }) => {
+      const u = new URL(request.url);
+      const name = params.name as string;
+      packageInstallCalls.push({
+        name,
+        version: u.searchParams.get("Version") ?? undefined,
+        updateClass: u.searchParams.get("UpdateClass") ?? undefined,
+      });
+      if (!options.simulateInstallTimeout) {
+        const version = u.searchParams.get("Version") ?? "1.0.0";
+        const existing = installedPlugins.find((p) => p.Name === name);
+        if (existing) {
+          existing.Version = version;
+        } else {
+          pluginIdCounter += 1;
+          installedPlugins.push({
+            Name: name,
+            Version: version,
+            Id: `plugin-${pluginIdCounter}`,
+          });
+        }
+      }
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.delete(`${EMBY_HOST}/emby/Plugins/:id`, ({ params }) => {
+      const idx = installedPlugins.findIndex((p) => p.Id === params.id);
+      if (idx !== -1) installedPlugins.splice(idx, 1);
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.post(`${EMBY_HOST}/emby/System/Restart`, () => {
+      restartCalls += 1;
+      return new HttpResponse(null, { status: 204 });
     })
   );
-  return { getLibraries: () => libraries, getAuthKeys: () => authKeys };
+  return {
+    getLibraries: () => libraries,
+    getAuthKeys: () => authKeys,
+    getSupporterKey: () => supporterKey,
+    getRegKeyCalls: () => regKeyCalls,
+    getInstalledPlugins: () => installedPlugins,
+    getPackageInstallCalls: () => packageInstallCalls,
+    getRestartCalls: () => restartCalls,
+  };
 }
 
 describe("runInit", () => {
@@ -374,6 +448,254 @@ describe("runInit", () => {
     expect(result.apiKeysCreated).toEqual([{ app: "fresh", token: "new-token-1" }]);
   });
 
+  it("registers a premiere key when the server has none", async () => {
+    const { getSupporterKey, getRegKeyCalls } = installFreshEmby();
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      premiereKey: "MB-TEST-KEY-123",
+    });
+    expect(result.premiereKey).toEqual({ requested: true, updated: true, skipped: false });
+    expect(getSupporterKey()).toBe("MB-TEST-KEY-123");
+    expect(getRegKeyCalls()).toEqual(["MB-TEST-KEY-123"]);
+  });
+
+  it("is idempotent: the premiere key is skipped when already registered", async () => {
+    const { getRegKeyCalls } = installFreshEmby({ initialSupporterKey: "MB-TEST-KEY-123" });
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      premiereKey: "MB-TEST-KEY-123",
+    });
+    expect(result.premiereKey).toEqual({ requested: true, updated: false, skipped: true });
+    // No registration call should have been issued.
+    expect(getRegKeyCalls()).toEqual([]);
+  });
+
+  it("updates the premiere key when the server has a different one", async () => {
+    const { getSupporterKey, getRegKeyCalls } = installFreshEmby({
+      initialSupporterKey: "OLD-KEY",
+    });
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      premiereKey: "NEW-KEY",
+    });
+    expect(result.premiereKey).toEqual({ requested: true, updated: true, skipped: false });
+    expect(getSupporterKey()).toBe("NEW-KEY");
+    expect(getRegKeyCalls()).toEqual(["NEW-KEY"]);
+  });
+
+  it("does not touch the premiere key when none is configured", async () => {
+    const { getRegKeyCalls } = installFreshEmby({ initialSupporterKey: "EXISTING-KEY" });
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+    });
+    expect(result.premiereKey).toEqual({ requested: false });
+    // We must not have hit the RegKey endpoint.
+    expect(getRegKeyCalls()).toEqual([]);
+  });
+
+  it("surfaces a rejected premiere key as the underlying axios error", async () => {
+    // Emby returns 4xx when the Premiere license service refuses the key.
+    // The error must propagate; we should NOT silently report skipped=true.
+    server.use(
+      http.get(`${EMBY_HOST}/emby/Startup/Configuration`, () =>
+        HttpResponse.json({}, { status: 401 })
+      ),
+      http.post(`${EMBY_HOST}/emby/Users/AuthenticateByName`, () =>
+        HttpResponse.json({ AccessToken: "tok" })
+      ),
+      http.get(`${EMBY_HOST}/emby/Library/VirtualFolders`, () => HttpResponse.json([])),
+      http.get(`${EMBY_HOST}/emby/System/Configuration`, () =>
+        HttpResponse.json({ SupporterKey: "" })
+      ),
+      http.post(`${EMBY_HOST}/emby/Registrations/RegKey`, () =>
+        HttpResponse.json({ error: "invalid key" }, { status: 400 })
+      )
+    );
+    const client = new EmbyClient(EMBY_HOST, "");
+    await expect(
+      runInit(client, {
+        adminUsername: "admin",
+        adminPassword: "pw",
+        premiereKey: "BOGUS",
+      })
+    ).rejects.toThrow();
+  });
+
+  // --- plugins in runInit ---
+
+  it("installs plugins that are not already present", async () => {
+    const { getInstalledPlugins, getPackageInstallCalls, getRestartCalls } = installFreshEmby();
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [{ name: "Trakt" }, { name: "TVHeadEnd", version: "1.2.3" }],
+      // Use tiny timeouts so test runs don't linger even if the mock misbehaves.
+      pluginInstallTimeoutMs: 2000,
+      pluginInstallPollIntervalMs: 10,
+    });
+    expect(result.plugins).toHaveLength(2);
+    expect(result.plugins.map((p) => ({ name: p.name, status: p.status }))).toEqual([
+      { name: "Trakt", status: "installed" },
+      { name: "TVHeadEnd", status: "installed" },
+    ]);
+    expect(result.plugins[1].version).toBe("1.2.3");
+    expect(
+      getInstalledPlugins()
+        .map((p) => p.Name)
+        .sort()
+    ).toEqual(["TVHeadEnd", "Trakt"]);
+    expect(
+      getPackageInstallCalls()
+        .map((c) => c.name)
+        .sort()
+    ).toEqual(["TVHeadEnd", "Trakt"]);
+    // No restart requested in this test.
+    expect(result.serverRestarted).toBe(false);
+    expect(getRestartCalls()).toBe(0);
+  });
+
+  it("skips plugins already installed at a matching or unspecified version", async () => {
+    const { getPackageInstallCalls } = installFreshEmby({
+      initialPlugins: [
+        { Name: "Trakt", Version: "1.0.0", Id: "p-trakt" },
+        { Name: "TVHeadEnd", Version: "1.2.3", Id: "p-tvh" },
+      ],
+    });
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [
+        // No version: any installed version matches.
+        { name: "Trakt" },
+        // Matching version: also a skip.
+        { name: "TVHeadEnd", version: "1.2.3" },
+      ],
+    });
+    expect(result.plugins.map((p) => p.status)).toEqual(["skipped", "skipped"]);
+    // Crucially, no install POSTs should have been issued.
+    expect(getPackageInstallCalls()).toEqual([]);
+  });
+
+  it("upgrades a plugin when the installed version differs from the spec", async () => {
+    const { getInstalledPlugins, getPackageInstallCalls } = installFreshEmby({
+      initialPlugins: [{ Name: "Trakt", Version: "1.0.0", Id: "p-trakt" }],
+    });
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [{ name: "Trakt", version: "2.0.0" }],
+      pluginInstallTimeoutMs: 2000,
+      pluginInstallPollIntervalMs: 10,
+    });
+    expect(result.plugins).toHaveLength(1);
+    expect(result.plugins[0]).toMatchObject({
+      name: "Trakt",
+      version: "2.0.0",
+      status: "upgraded",
+    });
+    expect(getInstalledPlugins().find((p) => p.Name === "Trakt")?.Version).toBe("2.0.0");
+    expect(getPackageInstallCalls()).toEqual([
+      { name: "Trakt", version: "2.0.0", updateClass: undefined },
+    ]);
+  });
+
+  it("forwards version and updateClass as query params", async () => {
+    const { getPackageInstallCalls } = installFreshEmby();
+    const client = new EmbyClient(EMBY_HOST, "");
+    await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [{ name: "Trakt", version: "2.0.0", updateClass: "Beta" }],
+      pluginInstallTimeoutMs: 2000,
+      pluginInstallPollIntervalMs: 10,
+    });
+    expect(getPackageInstallCalls()).toEqual([
+      { name: "Trakt", version: "2.0.0", updateClass: "Beta" },
+    ]);
+  });
+
+  it("times out (throws PluginInstallTimeoutError) when the plugin never appears", async () => {
+    installFreshEmby({ simulateInstallTimeout: true });
+    const client = new EmbyClient(EMBY_HOST, "");
+    const err = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [{ name: "GhostPlugin" }],
+      pluginInstallTimeoutMs: 50,
+      pluginInstallPollIntervalMs: 10,
+    }).catch((e) => e);
+    expect(err).toBeDefined();
+    expect((err as Error).name).toBe("PluginInstallTimeoutError");
+    expect((err as Error).message).toMatch(/GhostPlugin/);
+  });
+
+  it("restarts the server when restartAfterPlugins=true AND a plugin was installed", async () => {
+    const { getRestartCalls } = installFreshEmby();
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [{ name: "Trakt" }],
+      restartAfterPlugins: true,
+      pluginInstallTimeoutMs: 2000,
+      pluginInstallPollIntervalMs: 10,
+    });
+    expect(result.serverRestarted).toBe(true);
+    expect(getRestartCalls()).toBe(1);
+  });
+
+  it("does NOT restart when restartAfterPlugins=true but every plugin was skipped", async () => {
+    // All specs match already-installed plugins -> no mutation -> no restart.
+    const { getRestartCalls } = installFreshEmby({
+      initialPlugins: [{ Name: "Trakt", Version: "1.0.0", Id: "p-trakt" }],
+    });
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [{ name: "Trakt" }],
+      restartAfterPlugins: true,
+    });
+    expect(result.serverRestarted).toBe(false);
+    expect(getRestartCalls()).toBe(0);
+  });
+
+  it("does NOT restart when restartAfterPlugins is unset/false", async () => {
+    const { getRestartCalls } = installFreshEmby();
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+      plugins: [{ name: "Trakt" }],
+      pluginInstallTimeoutMs: 2000,
+      pluginInstallPollIntervalMs: 10,
+    });
+    expect(result.serverRestarted).toBe(false);
+    expect(getRestartCalls()).toBe(0);
+  });
+
+  it("reports empty plugins and serverRestarted=false when no plugins are configured", async () => {
+    installFreshEmby();
+    const client = new EmbyClient(EMBY_HOST, "");
+    const result = await runInit(client, {
+      adminUsername: "admin",
+      adminPassword: "pw",
+    });
+    expect(result.plugins).toEqual([]);
+    expect(result.serverRestarted).toBe(false);
+  });
+
   it("does NOT wrap a 401 during the wizard-creation path (only post-init)", async () => {
     // If the server returns 401 on AuthenticateByName *during* a fresh-init
     // flow, it's a genuine auth bug, not a stale-password mismatch. We must
@@ -457,6 +779,11 @@ describe("emby init (CLI)", () => {
           { name: "TV", path: "/data/tv", collectionType: "tvshows" },
         ],
         apiKeys: ["my-app"],
+        premiereKey: "MB-CLI-KEY",
+        plugins: [{ name: "Trakt" }],
+        restartAfterPlugins: true,
+        pluginInstallTimeoutMs: 2000,
+        pluginInstallPollIntervalMs: 10,
       }),
       "utf8"
     );
@@ -474,6 +801,10 @@ describe("emby init (CLI)", () => {
       expect(out.apiKeysCreated[0].app).toBe("my-app");
       expect(out.apiKeysCreated[0].token).toMatch(/^generated-token-\d+$/);
       expect(out.apiKeysSkipped).toEqual([]);
+      expect(out.premiereKey).toEqual({ requested: true, updated: true, skipped: false });
+      expect(out.plugins).toHaveLength(1);
+      expect(out.plugins[0]).toMatchObject({ name: "Trakt", status: "installed" });
+      expect(out.serverRestarted).toBe(true);
     } finally {
       fs.rmSync(configPath, { force: true });
     }

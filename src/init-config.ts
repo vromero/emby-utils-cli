@@ -17,7 +17,13 @@
  *       { "name": "Movies",  "path": "/data/movies",  "collectionType": "movies" },
  *       { "name": "TV",      "path": "/data/tv",      "collectionType": "tvshows" }
  *     ],
- *     "apiKeys": ["my-app", "another-integration"]
+ *     "apiKeys": ["my-app", "another-integration"],
+ *     "premiereKey": "${EMBY_PREMIERE_KEY}",
+ *     "plugins": [
+ *       { "name": "Trakt" },
+ *       { "name": "TVHeadEnd", "version": "1.2.3", "updateClass": "Release" }
+ *     ],
+ *     "restartAfterPlugins": true
  *   }
  */
 import { readFileSync } from "node:fs";
@@ -30,6 +36,18 @@ const LibrarySchema = z
     name: z.string().min(1, "library name must not be empty"),
     path: z.string().min(1, "library path must not be empty"),
     collectionType: z.string().optional(),
+  })
+  .strict();
+
+/** Schema for one entry in `plugins`. */
+const PluginSchema = z
+  .object({
+    name: z.string().min(1, "plugin name must not be empty"),
+    /** Optional exact version. Omit to track whatever is latest in the update class. */
+    version: z.string().min(1, "plugin version must not be empty").optional(),
+    updateClass: z.enum(["Release", "Beta", "Dev"]).optional(),
+    /** Optional assembly GUID for disambiguating duplicate package names. */
+    assemblyGuid: z.string().min(1, "plugin assemblyGuid must not be empty").optional(),
   })
   .strict();
 
@@ -46,6 +64,34 @@ const InitConfigSchema = z
      * label already exists it is reused rather than duplicated.
      */
     apiKeys: z.array(z.string().min(1, "apiKeys entries must not be empty")).optional(),
+    /**
+     * Emby Premiere (supporter) key to register with the server. Idempotent:
+     * if the server already has this key set we skip the registration call.
+     */
+    premiereKey: z.string().min(1, "premiereKey must not be empty").optional(),
+    /**
+     * Plugins to install. Identity is by `name`; already-installed plugins
+     * at the requested (or any, when `version` is omitted) version are
+     * left alone.
+     */
+    plugins: z.array(PluginSchema).optional(),
+    /**
+     * When true AND at least one plugin was newly installed/upgraded,
+     * POST /System/Restart at the end of the run. Default false.
+     */
+    restartAfterPlugins: z.boolean().optional(),
+    /** Max time (ms) to wait for each plugin to appear in /Plugins. */
+    pluginInstallTimeoutMs: z
+      .number()
+      .int()
+      .positive("pluginInstallTimeoutMs must be > 0")
+      .optional(),
+    /** Poll interval (ms) while waiting. */
+    pluginInstallPollIntervalMs: z
+      .number()
+      .int()
+      .positive("pluginInstallPollIntervalMs must be > 0")
+      .optional(),
     requireFresh: z.boolean().optional(),
     refreshLibraries: z.boolean().optional(),
   })
@@ -156,6 +202,11 @@ export function toInitOptions(config: InitConfig): InitOptions {
     metadataLanguage: config.metadataLanguage,
     libraries: config.libraries,
     apiKeys: config.apiKeys,
+    premiereKey: config.premiereKey,
+    plugins: config.plugins,
+    restartAfterPlugins: config.restartAfterPlugins,
+    pluginInstallTimeoutMs: config.pluginInstallTimeoutMs,
+    pluginInstallPollIntervalMs: config.pluginInstallPollIntervalMs,
     requireFresh: config.requireFresh,
     refreshLibraries: config.refreshLibraries,
   };

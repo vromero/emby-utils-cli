@@ -1,8 +1,16 @@
 import { Command } from "commander";
 import { EmbyClient } from "@emby-utils/client";
 import { formatOutput, OutputFormat } from "./format.js";
-import { runInit } from "./init.js";
+import { readSupporterKey, registerPremiereKey, runInit } from "./init.js";
 import { loadInitConfig, toInitOptions } from "./init-config.js";
+import {
+  DEFAULT_INSTALL_POLL_INTERVAL_MS,
+  DEFAULT_INSTALL_TIMEOUT_MS,
+  reconcilePlugins,
+  resolvePluginId,
+  uninstallPlugin,
+  PluginNotFoundError,
+} from "./plugins.js";
 
 /** How results are emitted. Overridable so tests can capture output. */
 export interface CliIO {
@@ -118,6 +126,9 @@ export function buildCli(config: CliConfig = {}): Command {
           librariesSkipped: result.librariesSkipped,
           apiKeysCreated: result.apiKeysCreated,
           apiKeysSkipped: result.apiKeysSkipped,
+          premiereKey: result.premiereKey,
+          plugins: result.plugins,
+          serverRestarted: result.serverRestarted,
         });
       })
     );
@@ -290,6 +301,44 @@ export function buildCli(config: CliConfig = {}): Command {
       })
     );
 
+  // --- `emby premiere` ---
+  //
+  // Emby Premiere (supporter) key management. Both subcommands require the
+  // usual --host / --api-key (admin token) because the underlying
+  // /System/Configuration and /Registrations/RegKey endpoints are admin-only.
+  const premiere = program
+    .command("premiere")
+    .description("Emby Premiere (supporter) key operations.");
+  premiere
+    .command("status")
+    .description("Print the currently-registered Emby Premiere key (if any).")
+    .action(
+      wrap(io, async () => {
+        const client = resolveClient(premiere, factory, io);
+        if (!client) return;
+        const key = await readSupporterKey(client);
+        emit(io, program, { supporterKey: key ?? null, registered: key !== undefined });
+      })
+    );
+  premiere
+    .command("set <key>")
+    .description(
+      "Register an Emby Premiere (supporter) key. Idempotent: no request is sent when the server already reports the same key."
+    )
+    .action(
+      wrap(io, async (key: string) => {
+        const client = resolveClient(premiere, factory, io);
+        if (!client) return;
+        const current = await readSupporterKey(client);
+        if (current === key) {
+          emit(io, program, { supporterKey: key, updated: false, skipped: true });
+          return;
+        }
+        await registerPremiereKey(client, key);
+        emit(io, program, { supporterKey: key, updated: true, skipped: false });
+      })
+    );
+
   // --- `emby plugins` ---
   const plugins = program.command("plugins").description("Plugin operations.");
   plugins
@@ -303,6 +352,116 @@ export function buildCli(config: CliConfig = {}): Command {
         emit(io, program, data);
       })
     );
-
+  plugins
+    .command("install <name>")
+    .description(
+      "Install a plugin by name. Idempotent: returns status=skipped when the plugin is already installed at a matching version, status=upgraded on a version mismatch, status=installed on a fresh install. Waits for the plugin to appear in /Plugins before returning."
+    )
+    .option(
+      "--plugin-version <version>",
+      "Exact plugin version. Default: latest in the update class. (The option is not called --version because that collides with the program's --version flag.)"
+    )
+    .option("--update-class <class>", "Release channel: Release (default), Beta, or Dev.")
+    .option(
+      "--assembly-guid <guid>",
+      "Assembly GUID, used to disambiguate packages that share a name."
+    )
+    .option("--no-wait", "Fire-and-forget: skip polling /Plugins after POST.")
+    .option(
+      "--timeout-ms <ms>",
+      `Max time (ms) to wait for /Plugins to report the install. Default ${DEFAULT_INSTALL_TIMEOUT_MS}.`,
+      (v) => parseInt(v, 10)
+    )
+    .option(
+      "--poll-interval-ms <ms>",
+      `Poll interval (ms) while waiting. Default ${DEFAULT_INSTALL_POLL_INTERVAL_MS}.`,
+      (v) => parseInt(v, 10)
+    )
+    .action(
+      wrap(
+        io,
+        async (
+          name: string,
+          opts: {
+            pluginVersion?: string;
+            updateClass?: string;
+            assemblyGuid?: string;
+            wait: boolean;
+            timeoutMs?: number;
+            pollIntervalMs?: number;
+          }
+        ) => {
+          const client = resolveClient(plugins, factory, io);
+          if (!client) return;
+          if (
+            opts.updateClass !== undefined &&
+            opts.updateClass !== "Release" &&
+            opts.updateClass !== "Beta" &&
+            opts.updateClass !== "Dev"
+          ) {
+            io.stderr(`Error: --update-class must be one of Release, Beta, Dev.`);
+            io.exit(2);
+            return;
+          }
+          if (opts.wait === false) {
+            // Fire-and-forget path: bypass reconcilePlugins and just POST.
+            const queryParams: Record<string, string> = {};
+            if (opts.pluginVersion !== undefined) queryParams.Version = opts.pluginVersion;
+            if (opts.updateClass !== undefined) queryParams.UpdateClass = opts.updateClass;
+            if (opts.assemblyGuid !== undefined) queryParams.AssemblyGuid = opts.assemblyGuid;
+            await client.callOperation("postPackagesInstalledByName", {
+              pathParams: { Name: name },
+              queryParams,
+            });
+            emit(io, program, {
+              name,
+              status: "installQueued",
+              waited: false,
+            });
+            return;
+          }
+          const { outcomes } = await reconcilePlugins(
+            client,
+            [
+              {
+                name,
+                version: opts.pluginVersion,
+                updateClass: opts.updateClass as "Release" | "Beta" | "Dev" | undefined,
+                assemblyGuid: opts.assemblyGuid,
+              },
+            ],
+            {
+              installTimeoutMs: opts.timeoutMs,
+              installPollIntervalMs: opts.pollIntervalMs,
+            }
+          );
+          emit(io, program, { ...outcomes[0], waited: true });
+        }
+      )
+    );
+  plugins
+    .command("uninstall <idOrName>")
+    .description(
+      "Uninstall a plugin by Id or Name. If an installed plugin matches by Id, that is used; otherwise we look up the Id by Name. Exits non-zero when no installed plugin matches, unless --if-present is passed."
+    )
+    .option("--if-present", "Treat 'not installed' as a no-op rather than an error.")
+    .action(
+      wrap(io, async (idOrName: string, opts: { ifPresent?: boolean }) => {
+        const client = resolveClient(plugins, factory, io);
+        if (!client) return;
+        let pluginId: string;
+        try {
+          pluginId = await resolvePluginId(client, idOrName);
+        } catch (err) {
+          if (err instanceof PluginNotFoundError && opts.ifPresent) {
+            emit(io, program, { query: idOrName, status: "notInstalled" });
+            return;
+          }
+          throw err;
+        }
+        await uninstallPlugin(client, pluginId);
+        emit(io, program, { query: idOrName, id: pluginId, status: "uninstalled" });
+      })
+    );
   return program;
 }

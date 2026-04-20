@@ -156,6 +156,11 @@ describe("toInitOptions", () => {
       metadataLanguage: "en",
       libraries: [{ name: "M", path: "/m" }],
       apiKeys: ["app1", "app2"],
+      premiereKey: "MB-XYZ",
+      plugins: [{ name: "Trakt", version: "1.2.3", updateClass: "Beta" }],
+      restartAfterPlugins: true,
+      pluginInstallTimeoutMs: 30_000,
+      pluginInstallPollIntervalMs: 500,
       requireFresh: true,
       refreshLibraries: true,
     });
@@ -167,6 +172,11 @@ describe("toInitOptions", () => {
       metadataLanguage: "en",
       libraries: [{ name: "M", path: "/m" }],
       apiKeys: ["app1", "app2"],
+      premiereKey: "MB-XYZ",
+      plugins: [{ name: "Trakt", version: "1.2.3", updateClass: "Beta" }],
+      restartAfterPlugins: true,
+      pluginInstallTimeoutMs: 30_000,
+      pluginInstallPollIntervalMs: 500,
       requireFresh: true,
       refreshLibraries: true,
     });
@@ -200,5 +210,130 @@ describe("apiKeys schema", () => {
       apiKeys: "not-an-array",
     });
     expect(() => loadInitConfig(p, {})).toThrow(/apiKeys/);
+  });
+});
+
+describe("premiereKey schema", () => {
+  it("accepts a non-empty string", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      premiereKey: "MB-ABC-123",
+    });
+    const cfg = loadInitConfig(p, {});
+    expect(cfg.premiereKey).toBe("MB-ABC-123");
+  });
+
+  it("expands ${VAR} placeholders so the key can live outside the config", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      premiereKey: "${EMBY_PREMIERE_KEY}",
+    });
+    const cfg = loadInitConfig(p, { EMBY_PREMIERE_KEY: "MB-FROM-ENV" });
+    expect(cfg.premiereKey).toBe("MB-FROM-ENV");
+  });
+
+  it("rejects an empty string", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      premiereKey: "",
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/premiereKey/);
+  });
+
+  it("rejects a non-string value", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      premiereKey: 12345,
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/premiereKey/);
+  });
+
+  it("is optional", () => {
+    const p = writeTempJson({ adminUsername: "a", adminPassword: "b" });
+    const cfg = loadInitConfig(p, {});
+    expect(cfg.premiereKey).toBeUndefined();
+  });
+});
+
+describe("plugins schema", () => {
+  it("accepts a minimal plugin spec (name only)", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      plugins: [{ name: "Trakt" }],
+    });
+    const cfg = loadInitConfig(p, {});
+    expect(cfg.plugins).toEqual([{ name: "Trakt" }]);
+  });
+
+  it("accepts all optional fields", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      plugins: [
+        {
+          name: "Trakt",
+          version: "1.2.3",
+          updateClass: "Beta",
+          assemblyGuid: "00000000-0000-0000-0000-000000000001",
+        },
+      ],
+    });
+    const cfg = loadInitConfig(p, {});
+    expect(cfg.plugins?.[0]).toEqual({
+      name: "Trakt",
+      version: "1.2.3",
+      updateClass: "Beta",
+      assemblyGuid: "00000000-0000-0000-0000-000000000001",
+    });
+  });
+
+  it("rejects an invalid updateClass value", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      plugins: [{ name: "Trakt", updateClass: "Nightly" }],
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/updateClass/);
+  });
+
+  it("rejects a missing plugin name", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      plugins: [{ version: "1.0.0" }],
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/plugins\.0\.name/);
+  });
+
+  it("rejects unknown fields on a plugin entry (strict)", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      plugins: [{ name: "Trakt", unknown: true }],
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/unknown/);
+  });
+
+  it("restartAfterPlugins must be a boolean", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      restartAfterPlugins: "yes",
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/restartAfterPlugins/);
+  });
+
+  it("pluginInstallTimeoutMs must be a positive integer", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      pluginInstallTimeoutMs: -5,
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/pluginInstallTimeoutMs/);
   });
 });

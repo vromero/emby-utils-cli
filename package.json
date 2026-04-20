@@ -1,8 +1,7 @@
 {
-  "name": "emby-utils-cli",
+  "name": "@emby-utils/cli",
   "version": "0.1.0",
-  "description": "Semantic command-line interface for the Emby REST API. Install directly from GitHub.",
-  "private": true,
+  "description": "Semantic command-line interface for the Emby REST API.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,6 +13,14 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -40,7 +47,7 @@
     "node": ">=22.13"
   },
   "dependencies": {
-    "@emby-utils/client": "github:vromero/emby-utils-client#v0.1.0",
+    "@emby-utils/client": "^0.1.0",
     "cli-table3": "^0.6.5",
     "commander": "^12.1.0",
     "yaml": "^2.8.3",

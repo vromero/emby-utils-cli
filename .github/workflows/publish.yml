@@ -1,0 +1,77 @@
+name: Publish
+
+# Publishes `@emby-utils/cli` to npm on every `v*` tag push.
+#
+# Prerequisites (one-time setup by the maintainer):
+#   - Create an npm automation token with publish rights to the
+#     `@emby-utils` scope: https://www.npmjs.com/settings/~/tokens
+#   - Store it as the repository secret `NPM_TOKEN`.
+#
+# Tag + publish flow:
+#   1. Bump `version` in package.json (e.g. 0.2.0), commit.
+#   2. `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin vX.Y.Z`.
+#   3. This workflow runs, re-runs the full verify pipeline, and
+#      publishes the tarball. The `provenance: true` publish attaches
+#      a signed build attestation so consumers can verify the artefact
+#      was built by this workflow.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# `provenance: true` requires `id-token: write`. `contents: read` is the
+# minimum needed to check out the repo at the tag.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install
+        # `prepare` builds dist/ as a side effect. No lockfile in-tree
+        # (see .gitignore) so we use `npm install` rather than `npm ci`.
+        run: npm install --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Verify tag matches package.json version
+        # Fail fast if someone pushed e.g. v0.2.0 but forgot to bump
+        # package.json to 0.2.0. Prevents publishing 0.1.0 under the
+        # wrong tag (and vice versa).
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag '$GITHUB_REF_NAME' does not match package.json version '$PKG'." >&2
+            exit 1
+          fi
+
+      - name: Publish to npm
+        # `provenance: true` attaches a signed SLSA build attestation.
+        # `access: public` is redundant with publishConfig.access in
+        # package.json but explicit here for clarity.
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
