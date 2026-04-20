@@ -1,14 +1,35 @@
-﻿# @emby-utils/cli
+# emby-utils-cli
 
 Semantic command-line interface for the [Emby](https://emby.media/) REST API.
 Built on [commander](https://github.com/tj/commander.js) on top of
-[`@emby-utils/client`](../client).
+[`@emby-utils/client`](https://github.com/vromero/emby-utils-client).
+
+> This project is **not published to npm**. Install directly from GitHub.
 
 ## Install
 
+Install globally from the GitHub repo, pinned to a released tag:
+
 ```bash
-npm install -g @emby-utils/cli
+npm install -g vromero/emby-utils-cli#v0.1.0
 ```
+
+Or, without a global install, use `npx` against a cloned checkout:
+
+```bash
+git clone https://github.com/vromero/emby-utils-cli.git
+cd emby-utils-cli
+npm install
+npm run build
+node dist/bin.js --help
+```
+
+`npm install` runs the `prepare` script which builds `dist/` automatically.
+The `@emby-utils/client` dependency is also resolved straight from GitHub
+(pinned to a tag in `package.json`), so there is no npm registry involved
+at any point.
+
+To upgrade, re-run the install command with a new tag (e.g. `#v0.2.0`).
 
 ## Configure
 
@@ -97,10 +118,15 @@ Example `emby.init.json`:
     { "name": "TV Shows", "path": "/data/tv", "collectionType": "tvshows" },
     { "name": "Music", "path": "/data/music", "collectionType": "music" }
   ],
+  "apiKeys": ["home-assistant", "mcp-server"],
   "requireFresh": false,
   "refreshLibraries": false
 }
 ```
+
+Each entry in `apiKeys` is the Emby "App" label used to identify the key.
+On re-runs, keys with a matching label are reused (their existing token is
+returned) rather than duplicated.
 
 Environment-variable placeholders are expanded at load time:
 
@@ -122,7 +148,12 @@ Output (JSON):
   "wizardRan": true,
   "accessToken": "abc123...",
   "librariesCreated": ["Movies", "TV Shows", "Music"],
-  "librariesSkipped": []
+  "librariesSkipped": [],
+  "apiKeysCreated": [
+    { "app": "home-assistant", "token": "..." },
+    { "app": "mcp-server", "token": "..." }
+  ],
+  "apiKeysSkipped": []
 }
 ```
 
