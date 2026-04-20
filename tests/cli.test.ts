@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { http, HttpResponse } from "msw";
 import { buildCli } from "../src/index.js";
-import { EMBY_API_KEY, EMBY_HOST, server } from "./setup.js";
+import { EMBY_HOST, server } from "./setup.js";
 import { makeIO, runCli } from "./helpers.js";
 import "./setup.js";
 

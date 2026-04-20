@@ -10,8 +10,8 @@ import {
   runInit,
 } from "../src/init.js";
 import { EmbyClient } from "@emby-utils/client";
-import { EMBY_API_KEY, EMBY_HOST, server } from "./setup.js";
-import { makeIO, runCli } from "./helpers.js";
+import { EMBY_HOST, server } from "./setup.js";
+import { runCli } from "./helpers.js";
 import "./setup.js";
 
 // --- parseLibraryFlag ---------------------------------------------------
