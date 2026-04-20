@@ -123,9 +123,9 @@ describe("loadInitConfig", () => {
     const p = writeTempJson({
       adminUsername: "a",
       adminPassword: "b",
-      libraries: [{ name: "Movies" }], // missing `path`
+      libraries: [{ name: "Movies" }], // missing both `path` and `paths`
     });
-    expect(() => loadInitConfig(p, {})).toThrow(/libraries\.0\.path/);
+    expect(() => loadInitConfig(p, {})).toThrow(/must specify either 'path' or 'paths'/);
   });
 
   it("reports a useful error for malformed JSON", () => {
@@ -170,7 +170,7 @@ describe("toInitOptions", () => {
       uiCulture: "en-GB",
       metadataCountry: "GB",
       metadataLanguage: "en",
-      libraries: [{ name: "M", path: "/m" }],
+      libraries: [{ name: "M", paths: ["/m"], collectionType: undefined }],
       apiKeys: ["app1", "app2"],
       premiereKey: "MB-XYZ",
       plugins: [{ name: "Trakt", version: "1.2.3", updateClass: "Beta" }],

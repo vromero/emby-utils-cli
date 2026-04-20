@@ -44,7 +44,8 @@ import {
 
 export interface LibrarySpec {
   name: string;
-  path: string;
+  /** One or more container-visible paths for this library. */
+  paths: string[];
   collectionType?: string;
 }
 
@@ -137,8 +138,8 @@ export class InitLibraryDriftError extends Error {
     /** Per-library mismatches, one entry per drifted library. */
     public readonly drifts: Array<{
       name: string;
-      desired: { path: string; collectionType?: string };
-      actual: { path: string | undefined; collectionType: string | undefined };
+      desired: { paths: string[]; collectionType?: string };
+      actual: { paths: string[]; collectionType: string | undefined };
     }>
   ) {
     super(message);
@@ -181,9 +182,9 @@ export function parseLibraryFlag(raw: string): LibrarySpec {
   if (colon > 0 && !rest.slice(colon + 1).includes("/")) {
     const ct = rest.slice(colon + 1).trim();
     const path = rest.slice(0, colon).trim();
-    if (ct && path) return { name, path, collectionType: ct };
+    if (ct && path) return { name, paths: [path], collectionType: ct };
   }
-  return { name, path: rest };
+  return { name, paths: [rest] };
 }
 
 export async function runInit(client: EmbyClient, opts: InitOptions): Promise<InitResult> {
@@ -248,16 +249,20 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
     for (const lib of libs) {
       const match = existing.find((e) => e.Name === lib.name);
       if (!match) continue;
-      const actualPath = match.Locations?.[0];
+      const actualPaths = (match.Locations ?? []) as string[];
       const actualCollectionType = match.CollectionType;
-      const pathDiffers = actualPath !== lib.path;
+      const desiredSorted = [...lib.paths].sort();
+      const actualSorted = [...actualPaths].sort();
+      const pathsDiffer =
+        desiredSorted.length !== actualSorted.length ||
+        desiredSorted.some((p, i) => p !== actualSorted[i]);
       const collectionTypeDiffers =
         lib.collectionType !== undefined && actualCollectionType !== lib.collectionType;
-      if (pathDiffers || collectionTypeDiffers) {
+      if (pathsDiffer || collectionTypeDiffers) {
         drifts.push({
           name: lib.name,
-          desired: { path: lib.path, collectionType: lib.collectionType },
-          actual: { path: actualPath, collectionType: actualCollectionType },
+          desired: { paths: lib.paths, collectionType: lib.collectionType },
+          actual: { paths: actualPaths, collectionType: actualCollectionType },
         });
       }
     }
@@ -265,8 +270,15 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
       const detail = drifts
         .map((d) => {
           const parts = [`  - '${d.name}':`];
-          if (d.desired.path !== d.actual.path) {
-            parts.push(`path desired='${d.desired.path}' actual='${d.actual.path ?? "(none)"}'`);
+          const desiredSorted = [...d.desired.paths].sort();
+          const actualSorted = [...d.actual.paths].sort();
+          if (
+            desiredSorted.length !== actualSorted.length ||
+            desiredSorted.some((p, i) => p !== actualSorted[i])
+          ) {
+            parts.push(
+              `paths desired=[${d.desired.paths.join(", ")}] actual=[${d.actual.paths.join(", ")}]`
+            );
           }
           if (
             d.desired.collectionType !== undefined &&
@@ -295,7 +307,7 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
   for (const lib of libs) {
     const res = await client.addLibrary({
       name: lib.name,
-      path: lib.path,
+      paths: lib.paths,
       collectionType: lib.collectionType,
       refreshLibrary: opts.refreshLibraries,
     });

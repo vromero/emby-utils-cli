@@ -15,7 +15,7 @@
  *     "uiCulture": "en-US",
  *     "libraries": [
  *       { "name": "Movies",  "path": "/data/movies",  "collectionType": "movies" },
- *       { "name": "TV",      "path": "/data/tv",      "collectionType": "tvshows" }
+ *       { "name": "TV",      "paths": ["/data/tv", "/data/tv-archive"],  "collectionType": "tvshows" }
  *     ],
  *     "apiKeys": ["my-app", "another-integration"],
  *     "premiereKey": "${EMBY_PREMIERE_KEY}",
@@ -34,10 +34,22 @@ import type { InitOptions } from "./init.js";
 const LibrarySchema = z
   .object({
     name: z.string().min(1, "library name must not be empty"),
-    path: z.string().min(1, "library path must not be empty"),
+    /** Single path (backward-compatible shorthand). Mutually exclusive with `paths`. */
+    path: z.string().min(1, "library path must not be empty").optional(),
+    /** Multiple paths for multi-folder libraries. Mutually exclusive with `path`. */
+    paths: z
+      .array(z.string().min(1, "library paths entries must not be empty"))
+      .min(1, "library paths must contain at least one entry")
+      .optional(),
     collectionType: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .refine((lib) => lib.path !== undefined || lib.paths !== undefined, {
+    message: "library must specify either 'path' or 'paths'",
+  })
+  .refine((lib) => !(lib.path !== undefined && lib.paths !== undefined), {
+    message: "library must not specify both 'path' and 'paths'; use one or the other",
+  });
 
 /** Schema for one entry in `plugins`. */
 const PluginSchema = z
@@ -200,7 +212,11 @@ export function toInitOptions(config: InitConfig): InitOptions {
     uiCulture: config.uiCulture,
     metadataCountry: config.metadataCountry,
     metadataLanguage: config.metadataLanguage,
-    libraries: config.libraries,
+    libraries: config.libraries?.map((lib) => ({
+      name: lib.name,
+      paths: lib.paths ?? [lib.path!],
+      collectionType: lib.collectionType,
+    })),
     apiKeys: config.apiKeys,
     premiereKey: config.premiereKey,
     plugins: config.plugins,

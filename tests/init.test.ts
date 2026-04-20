@@ -20,14 +20,14 @@ describe("parseLibraryFlag", () => {
   it("parses Name=/path without collection type", () => {
     expect(parseLibraryFlag("Movies=/data/movies")).toEqual({
       name: "Movies",
-      path: "/data/movies",
+      paths: ["/data/movies"],
     });
   });
 
   it("parses Name=/path:collectionType", () => {
     expect(parseLibraryFlag("TV=/data/tv:tvshows")).toEqual({
       name: "TV",
-      path: "/data/tv",
+      paths: ["/data/tv"],
       collectionType: "tvshows",
     });
   });
@@ -35,7 +35,7 @@ describe("parseLibraryFlag", () => {
   it("keeps colons inside the path when the suffix contains a slash", () => {
     expect(parseLibraryFlag("Music=//host/share:/music")).toEqual({
       name: "Music",
-      path: "//host/share:/music",
+      paths: ["//host/share:/music"],
     });
   });
 
@@ -180,8 +180,8 @@ describe("runInit", () => {
       adminUsername: "admin",
       adminPassword: "pw",
       libraries: [
-        { name: "Movies", path: "/data/movies", collectionType: "movies" },
-        { name: "TV", path: "/data/tv", collectionType: "tvshows" },
+        { name: "Movies", paths: ["/data/movies"], collectionType: "movies" },
+        { name: "TV", paths: ["/data/tv"], collectionType: "tvshows" },
       ],
     });
     expect(result.wizardRan).toBe(true);
@@ -210,7 +210,7 @@ describe("runInit", () => {
     const result = await runInit(client, {
       adminUsername: "admin",
       adminPassword: "pw",
-      libraries: [{ name: "Movies", path: "/data/movies" }],
+      libraries: [{ name: "Movies", paths: ["/data/movies"] }],
     });
     expect(result.wizardRan).toBe(false);
     expect(result.librariesCreated).toEqual([]);
@@ -256,14 +256,14 @@ describe("runInit", () => {
     const err = await runInit(client, {
       adminUsername: "admin",
       adminPassword: "pw",
-      libraries: [{ name: "Movies", path: "/data/new-movies", collectionType: "movies" }],
+      libraries: [{ name: "Movies", paths: ["/data/new-movies"], collectionType: "movies" }],
     }).catch((e) => e);
     expect(err).toBeInstanceOf(InitLibraryDriftError);
     const drift = (err as InitLibraryDriftError).drifts;
     expect(drift).toHaveLength(1);
     expect(drift[0].name).toBe("Movies");
-    expect(drift[0].desired.path).toBe("/data/new-movies");
-    expect(drift[0].actual.path).toBe("/data/old-movies");
+    expect(drift[0].desired.paths).toEqual(["/data/new-movies"]);
+    expect(drift[0].actual.paths).toEqual(["/data/old-movies"]);
     // No mutation attempted.
     expect(postCount).toBe(0);
   });
@@ -287,7 +287,7 @@ describe("runInit", () => {
       runInit(client, {
         adminUsername: "admin",
         adminPassword: "pw",
-        libraries: [{ name: "Movies", path: "/data/movies", collectionType: "mixed" }],
+        libraries: [{ name: "Movies", paths: ["/data/movies"], collectionType: "mixed" }],
       })
     ).rejects.toBeInstanceOf(InitLibraryDriftError);
   });
@@ -312,7 +312,7 @@ describe("runInit", () => {
     const result = await runInit(client, {
       adminUsername: "admin",
       adminPassword: "pw",
-      libraries: [{ name: "Movies", path: "/data/movies" }],
+      libraries: [{ name: "Movies", paths: ["/data/movies"] }],
     });
     expect(result.librariesSkipped).toEqual(["Movies"]);
   });
