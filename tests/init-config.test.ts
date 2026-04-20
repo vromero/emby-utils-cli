@@ -155,6 +155,7 @@ describe("toInitOptions", () => {
       metadataCountry: "GB",
       metadataLanguage: "en",
       libraries: [{ name: "M", path: "/m" }],
+      apiKeys: ["app1", "app2"],
       requireFresh: true,
       refreshLibraries: true,
     });
@@ -165,8 +166,39 @@ describe("toInitOptions", () => {
       metadataCountry: "GB",
       metadataLanguage: "en",
       libraries: [{ name: "M", path: "/m" }],
+      apiKeys: ["app1", "app2"],
       requireFresh: true,
       refreshLibraries: true,
     });
+  });
+});
+
+describe("apiKeys schema", () => {
+  it("accepts an array of non-empty strings", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      apiKeys: ["my-app", "another"],
+    });
+    const cfg = loadInitConfig(p, {});
+    expect(cfg.apiKeys).toEqual(["my-app", "another"]);
+  });
+
+  it("rejects an empty-string entry", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      apiKeys: [""],
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/apiKeys\.0/);
+  });
+
+  it("rejects a non-array value", () => {
+    const p = writeTempJson({
+      adminUsername: "a",
+      adminPassword: "b",
+      apiKeys: "not-an-array",
+    });
+    expect(() => loadInitConfig(p, {})).toThrow(/apiKeys/);
   });
 });

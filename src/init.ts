@@ -8,6 +8,8 @@
  *   4. POST /Startup/Complete.
  *   5. Log in as the new admin to obtain an access token.
  *   6. Add every requested library, skipping ones that already exist.
+ *   7. Create every requested API key (by `App` label), skipping names that
+ *      already exist (the existing key's token is returned instead).
  *
  * Idempotency guarantees:
  *   - Wizard: skipped on re-runs.
@@ -15,6 +17,9 @@
  *     are left untouched. Drift (same name, different path or different
  *     collection type) raises `InitLibraryDriftError` before any mutation
  *     so the operator can reconcile by hand.
+ *   - API keys: keys are identified by their `App` label. If a key with
+ *     that label already exists, its token is reused; otherwise a new key
+ *     is created. Emby itself permits duplicate labels; we don't.
  */
 import { EmbyClient, isAxiosError, StartupAlreadyCompletedError } from "@emby-utils/client";
 
@@ -37,10 +42,23 @@ export interface InitOptions {
   metadataLanguage?: string;
   /** Libraries to add. Existing libraries (by name) are left alone. */
   libraries?: LibrarySpec[];
+  /**
+   * API key "App" labels to create. If a key already exists for a given
+   * label, its existing token is reused instead of creating a duplicate.
+   */
+  apiKeys?: string[];
   /** If true, fail when the wizard has already been completed. */
   requireFresh?: boolean;
   /** Trigger a library scan after adding a library. Default: false. */
   refreshLibraries?: boolean;
+}
+
+/** An API key entry as surfaced to callers of `runInit`. */
+export interface ApiKeyRecord {
+  /** The `App` label identifying the key. */
+  app: string;
+  /** The opaque token value. */
+  token: string;
 }
 
 export interface InitResult {
@@ -52,6 +70,10 @@ export interface InitResult {
   librariesCreated: string[];
   /** Libraries that already existed and were left untouched. */
   librariesSkipped: string[];
+  /** API keys that were newly minted during this run. */
+  apiKeysCreated: ApiKeyRecord[];
+  /** API keys that already existed and were reused as-is. */
+  apiKeysSkipped: ApiKeyRecord[];
 }
 
 /** Raised when a library name exists but its path or collectionType differs. */
@@ -227,10 +249,74 @@ export async function runInit(client: EmbyClient, opts: InitOptions): Promise<In
     else skipped.push(lib.name);
   }
 
+  // API key reconciliation. Identified by the `App` label: matching label =>
+  // reuse the existing token; otherwise mint a fresh one. Emby permits
+  // duplicate labels; we always return the first match (Emby's own ordering)
+  // and never create a second.
+  const apiKeysCreated: ApiKeyRecord[] = [];
+  const apiKeysSkipped: ApiKeyRecord[] = [];
+  const apiKeyLabels = opts.apiKeys ?? [];
+  if (apiKeyLabels.length > 0) {
+    const existingByApp = await listExistingApiKeys(client);
+    for (const app of apiKeyLabels) {
+      const existing = existingByApp.get(app);
+      if (existing) {
+        apiKeysSkipped.push({ app, token: existing });
+        continue;
+      }
+      // `postAuthKeys` returns 204 No Content: the new key is not in the
+      // response, so we re-list and find the one with this App label.
+      await client.callOperation("postAuthKeys", { queryParams: { App: app } });
+      const refreshed = await listExistingApiKeys(client);
+      const token = refreshed.get(app);
+      if (!token) {
+        throw new Error(
+          `Emby accepted postAuthKeys for App='${app}' but the new key is not visible in /Auth/Keys.`
+        );
+      }
+      apiKeysCreated.push({ app, token });
+      // Keep our local view consistent for any subsequent labels in the loop.
+      existingByApp.set(app, token);
+    }
+  }
+
   return {
     wizardRan,
     accessToken: AccessToken,
     librariesCreated: created,
     librariesSkipped: skipped,
+    apiKeysCreated,
+    apiKeysSkipped,
   };
+}
+
+/**
+ * Fetch existing API keys and return a Map keyed by the `AppName` label.
+ * Emby returns either an array or a `{Items: [...]}` paged envelope
+ * depending on version; we handle both.
+ */
+async function listExistingApiKeys(client: EmbyClient): Promise<Map<string, string>> {
+  const raw = await client.callOperation<"getAuthKeys", unknown>("getAuthKeys");
+  const items = extractApiKeyItems(raw);
+  const out = new Map<string, string>();
+  for (const item of items) {
+    if (typeof item.AppName === "string" && typeof item.AccessToken === "string") {
+      // First wins; don't clobber earlier keys with later duplicates.
+      if (!out.has(item.AppName)) out.set(item.AppName, item.AccessToken);
+    }
+  }
+  return out;
+}
+
+interface AuthKeyDto {
+  AccessToken?: string;
+  AppName?: string;
+}
+
+function extractApiKeyItems(raw: unknown): AuthKeyDto[] {
+  if (Array.isArray(raw)) return raw as AuthKeyDto[];
+  if (raw && typeof raw === "object" && Array.isArray((raw as { Items?: unknown }).Items)) {
+    return (raw as { Items: AuthKeyDto[] }).Items;
+  }
+  return [];
 }

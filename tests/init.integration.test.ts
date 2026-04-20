@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Integration tests: drive a real `emby/embyserver` container via
  * testcontainers. Opt in with `EMBY_DOCKER_TESTS=1`; otherwise the
  * suites below are skipped so local `npm test` stays fast.
@@ -51,12 +51,17 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
           { name: "Movies", path: "/data/movies", collectionType: "movies" },
           { name: "TV Shows", path: "/data/tv", collectionType: "tvshows" },
         ],
+        apiKeys: ["integration-test-app"],
       });
 
       expect(result.wizardRan).toBe(true);
       expect(result.accessToken).toMatch(/^[0-9a-f]{20,}$/i);
       expect(result.librariesCreated.sort()).toEqual(["Movies", "TV Shows"]);
       expect(result.librariesSkipped).toEqual([]);
+      expect(result.apiKeysCreated).toHaveLength(1);
+      expect(result.apiKeysCreated[0].app).toBe("integration-test-app");
+      expect(result.apiKeysCreated[0].token).toMatch(/^[0-9a-f]{20,}$/i);
+      expect(result.apiKeysSkipped).toEqual([]);
 
       const authed = new EmbyClient(host, result.accessToken);
       expect(await authed.isStartupComplete()).toBe(true);
@@ -67,6 +72,11 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
       const libraries = await authed.callOperation("getLibraryVirtualfolders");
       const names = libraries.map((l) => l.Name).sort();
       expect(names).toEqual(["Movies", "TV Shows"]);
+
+      // The minted API key should itself be usable against the server.
+      const keyClient = new EmbyClient(host, result.apiKeysCreated[0].token);
+      const keyUsers = await keyClient.callOperation("getUsers");
+      expect(keyUsers.some((u) => u.Name === "admin")).toBe(true);
     }, 180_000);
 
     it("is idempotent on a second run", async () => {
@@ -78,10 +88,14 @@ describeIfDocker("Emby init integration (emby/embyserver:latest)", () => {
           { name: "Movies", path: "/data/movies", collectionType: "movies" },
           { name: "Music", path: "/data/music", collectionType: "music" },
         ],
+        apiKeys: ["integration-test-app", "second-app"],
       });
       expect(result.wizardRan).toBe(false);
       expect(result.librariesCreated).toEqual(["Music"]);
       expect(result.librariesSkipped).toEqual(["Movies"]);
+      // The first key was minted in the previous test; the second is new.
+      expect(result.apiKeysSkipped.map((k) => k.app)).toEqual(["integration-test-app"]);
+      expect(result.apiKeysCreated.map((k) => k.app)).toEqual(["second-app"]);
     }, 120_000);
   });
 

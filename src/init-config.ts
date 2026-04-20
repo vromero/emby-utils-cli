@@ -16,7 +16,8 @@
  *     "libraries": [
  *       { "name": "Movies",  "path": "/data/movies",  "collectionType": "movies" },
  *       { "name": "TV",      "path": "/data/tv",      "collectionType": "tvshows" }
- *     ]
+ *     ],
+ *     "apiKeys": ["my-app", "another-integration"]
  *   }
  */
 import { readFileSync } from "node:fs";
@@ -40,6 +41,11 @@ const InitConfigSchema = z
     metadataCountry: z.string().optional(),
     metadataLanguage: z.string().optional(),
     libraries: z.array(LibrarySchema).optional(),
+    /**
+     * API key "App" labels to create. Idempotent: if a key with the given
+     * label already exists it is reused rather than duplicated.
+     */
+    apiKeys: z.array(z.string().min(1, "apiKeys entries must not be empty")).optional(),
     requireFresh: z.boolean().optional(),
     refreshLibraries: z.boolean().optional(),
   })
@@ -149,6 +155,7 @@ export function toInitOptions(config: InitConfig): InitOptions {
     metadataCountry: config.metadataCountry,
     metadataLanguage: config.metadataLanguage,
     libraries: config.libraries,
+    apiKeys: config.apiKeys,
     requireFresh: config.requireFresh,
     refreshLibraries: config.refreshLibraries,
   };

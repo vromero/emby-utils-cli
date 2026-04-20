@@ -1,4 +1,4 @@
-﻿import { Command } from "commander";
+import { Command } from "commander";
 import { EmbyClient } from "@emby-utils/client";
 import { formatOutput, OutputFormat } from "./format.js";
 import { runInit } from "./init.js";
@@ -116,6 +116,8 @@ export function buildCli(config: CliConfig = {}): Command {
           accessToken: result.accessToken,
           librariesCreated: result.librariesCreated,
           librariesSkipped: result.librariesSkipped,
+          apiKeysCreated: result.apiKeysCreated,
+          apiKeysSkipped: result.apiKeysSkipped,
         });
       })
     );
